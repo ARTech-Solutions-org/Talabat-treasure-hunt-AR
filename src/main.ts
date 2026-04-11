@@ -5,7 +5,7 @@ import { fetchRound } from './game/round'
 import { postComplete } from './game/complete'
 import { payloadMatchesItem } from './game/match'
 import { startQrScan, startCamera, stopCamera, type QrScanHandle } from './game/qrScan'
-import { ModelViewer } from './game/modelViewer'
+import { QrArOverlay } from './game/qrArOverlay'
 
 function getPlayToken(): string | null {
   return new URLSearchParams(window.location.search).get('t')
@@ -84,16 +84,25 @@ async function main(): Promise<void> {
   scanWrap.append(video, scanCanvas)
 
   const hintScan = el('p', 'scan-hint', 'Point the camera at the booth QR code.')
-  play.append(playTop, cluePanel, scanWrap, hintScan)
+
+  const scanFeedback = el('div', 'scan-feedback')
+  const scanStatusEl = el('p', 'scan-status', 'Waiting for QR…')
+  const scanLastEl = el('p', 'scan-last', '')
+  scanFeedback.append(scanStatusEl, scanLastEl)
+  play.append(playTop, cluePanel, scanWrap, scanFeedback, hintScan)
 
   const modal = el('div', 'modal')
   modal.hidden = true
   const modalBackdrop = el('div', 'modal-backdrop')
   const modalCard = el('div', 'modal-card')
   const modalTitle = el('h2', 'modal-title', 'Found!')
-  const modelHost = el('div', 'model-host')
+  const modalHint = el(
+    'p',
+    'modal-hint',
+    '3D appears on the camera preview (centered first, then on the QR). Use good light and hold steady.',
+  )
   const modalBtn = el('button', 'btn primary block', 'Continue')
-  modalCard.append(modalTitle, modelHost, modalBtn)
+  modalCard.append(modalTitle, modalHint, modalBtn)
   modal.append(modalBackdrop, modalCard)
 
   const done = mk('done', [
@@ -128,7 +137,8 @@ async function main(): Promise<void> {
   let timerStart: number | null = null
   let rafTimer = 0
   let qrHandle: QrScanHandle | null = null
-  const viewer = new ModelViewer(modelHost)
+  let rewardModalOpen = false
+  const qrAr = new QrArOverlay(scanWrap, video)
 
   const updateTimerDisplay = (): void => {
     if (timerStart === null) {
@@ -160,32 +170,60 @@ async function main(): Promise<void> {
     if (!round || step >= round.items.length) return
     clueText.textContent = round.items[step].hint
     updateProgress()
+    scanStatusEl.textContent = 'Waiting for QR…'
+    scanStatusEl.className = 'scan-status'
+    scanLastEl.textContent = ''
+  }
+
+  function truncatePayload(text: string, max: number): string {
+    const t = text.trim()
+    if (t.length <= max) return t
+    return `${t.slice(0, max)}…`
   }
 
   async function onQrPayload(text: string): Promise<void> {
-    if (!round || timerStart === null) return
-    const row = round.items[step]
-    if (!row || !payloadMatchesItem(text, row.item)) return
+    const preview = truncatePayload(text, 96)
+    scanLastEl.textContent = preview ? `Read: “${preview}”` : ''
 
-    qrHandle?.clearLast()
-    if (qrHandle) {
-      qrHandle.stop()
-      qrHandle = null
+    if (rewardModalOpen) return
+
+    if (!round || timerStart === null) return
+
+    const row = round.items[step]
+    if (!row) return
+
+    if (!payloadMatchesItem(text, row.item)) {
+      scanStatusEl.className = 'scan-status scan-status--warn'
+      scanStatusEl.textContent = `Not this booth — QR must match “${row.item.name}” (customId: ${row.item.customId})`
+      if (navigator.vibrate) navigator.vibrate(25)
+      window.setTimeout(() => qrHandle?.clearLast(), 400)
+      return
     }
 
+    scanStatusEl.className = 'scan-status scan-status--ok'
+    scanStatusEl.textContent = 'Match — 3D on QR'
+    if (navigator.vibrate) navigator.vibrate([35, 50, 35])
+
+    rewardModalOpen = true
     modal.hidden = false
     modalTitle.textContent = row.item.name
-    await viewer.showModel(modelUrlForCustomId(row.item.customId))
+    await qrAr.loadModel(modelUrlForCustomId(row.item.customId))
+    qrAr.showModel()
+    requestAnimationFrame(() => qrAr.resize())
 
     const onContinue = async () => {
       modalBtn.removeEventListener('click', onContinue)
-      viewer.dispose()
+      rewardModalOpen = false
+      qrAr.setTracking(null)
+      qrAr.dispose()
       modal.hidden = true
       step += 1
 
       if (!round || step >= round.items.length) {
         stopLoopTimer()
         stopCamera(video)
+        qrHandle?.stop()
+        qrHandle = null
         showScreen(app, 'loading')
         loading.querySelector('.status')!.textContent = 'Submitting score…'
 
@@ -198,7 +236,7 @@ async function main(): Promise<void> {
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Could not submit score'
           modal.hidden = true
-          viewer.dispose()
+          qrAr.dispose()
           error.querySelector('.msg')!.textContent = msg
           showScreen(app, 'error')
         }
@@ -206,12 +244,32 @@ async function main(): Promise<void> {
       }
 
       showCurrentClue()
-      qrHandle = startQrScan(video, scanCanvas, (t) => {
-        void onQrPayload(t)
-      })
+      startPlayScan(text)
     }
 
     modalBtn.addEventListener('click', onContinue, { once: true })
+  }
+
+  function startPlayScan(initialLast?: string): void {
+    qrHandle?.stop()
+    qrHandle = startQrScan(
+      video,
+      scanCanvas,
+      (t) => {
+        void onQrPayload(t)
+      },
+      {
+        initialLast,
+        onTrackFrame: (info) => {
+          if (!rewardModalOpen || !round) return
+          const row = round.items[step]
+          if (!info || !row) return
+          if (payloadMatchesItem(info.data, row.item)) {
+            qrAr.setTracking(info.location)
+          }
+        },
+      },
+    )
   }
 
   function formatMs(ms: number): string {
@@ -265,12 +323,10 @@ async function main(): Promise<void> {
       return
     }
 
-    qrHandle = startQrScan(video, scanCanvas, (t) => {
-      void onQrPayload(t)
-    })
+    startPlayScan()
   })
 
-  window.addEventListener('resize', () => viewer.resize())
+  window.addEventListener('resize', () => qrAr.resize())
 
   await loadRound()
 }

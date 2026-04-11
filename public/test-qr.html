@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Treasure Hunt — test QR</title>
+    <style>
+      :root {
+        font-family: system-ui, sans-serif;
+        background: #0d1117;
+        color: #e6edf3;
+      }
+      body {
+        max-width: 28rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      label {
+        display: block;
+        margin-top: 1rem;
+        font-size: 0.85rem;
+        color: #8b949e;
+      }
+      input {
+        width: 100%;
+        margin-top: 0.35rem;
+        padding: 0.6rem 0.75rem;
+        border-radius: 8px;
+        border: 1px solid #30363d;
+        background: #161b22;
+        color: #e6edf3;
+        font-size: 1rem;
+        box-sizing: border-box;
+      }
+      button {
+        margin-top: 1rem;
+        padding: 0.65rem 1rem;
+        border: none;
+        border-radius: 8px;
+        background: linear-gradient(135deg, #f97316, #ea580c);
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+        font-size: 1rem;
+      }
+      button:hover {
+        filter: brightness(1.05);
+      }
+      #qrcode {
+        margin: 1.5rem auto;
+        padding: 1rem;
+        background: #fff;
+        border-radius: 12px;
+        width: fit-content;
+      }
+      #qrcode img {
+        display: block;
+      }
+      .hint {
+        font-size: 0.9rem;
+        color: #8b949e;
+        line-height: 1.5;
+        margin-top: 1rem;
+      }
+      code {
+        background: #161b22;
+        padding: 0.1rem 0.35rem;
+        border-radius: 4px;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Test QR generator</h1>
+    <p class="hint">
+      The game matches the <strong>raw text</strong> inside the QR (e.g. <code>customId</code>,
+      <code>_id</code>, or <code>name</code> from your round). Enter the same value your booth should
+      use, then scan with the game camera.
+    </p>
+
+    <label for="payload">QR payload (plain text)</label>
+    <input id="payload" type="text" value="2" autocomplete="off" spellcheck="false" />
+
+    <button type="button" id="gen">Generate QR</button>
+
+    <div id="qrcode" aria-live="polite"></div>
+
+    <p class="hint">
+      Example from API: <code>customId: "2"</code> → payload <code>2</code>. For <code>name:
+      "Karim"</code> you can use payload <code>Karim</code> instead.
+    </p>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script>
+      const el = document.getElementById('qrcode')
+      const input = document.getElementById('payload')
+      function render() {
+        el.innerHTML = ''
+        const text = input.value.trim()
+        if (!text) {
+          el.textContent = 'Enter a non-empty payload.'
+          return
+        }
+        new QRCode(el, {
+          text,
+          width: 280,
+          height: 280,
+        })
+      }
+      document.getElementById('gen').addEventListener('click', render)
+      render()
+    </script>
+  </body>
+</html>
