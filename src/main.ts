@@ -5,12 +5,13 @@ import { fetchRound } from './game/round'
 import { postComplete } from './game/complete'
 import { payloadMatchesItem } from './game/match'
 import { startQrScan, startCamera, stopCamera, type QrScanHandle } from './game/qrScan'
-import { QrArOverlay } from './game/qrArOverlay'
+import { RewardChestReveal } from './game/rewardReveal'
 
 function getPlayToken(): string | null {
   return new URLSearchParams(window.location.search).get('t')
 }
 
+/** Prefer `public/models/<customId>.glb`; if missing, the loader tries `<customId>.stl`. */
 function modelUrlForCustomId(customId: string): string {
   const base = import.meta.env.BASE_URL
   return `${base}models/${encodeURIComponent(customId)}.glb`
@@ -63,16 +64,30 @@ async function main(): Promise<void> {
 
   const play = mk('play', [])
   play.hidden = true
-  const playTop = el('div', 'play-top')
+  play.classList.add('play-screen')
+
+  const playTop = el('div', 'play-top-bar')
   const timerEl = el('div', 'timer', '0:00')
-  const progressEl = el('div', 'progress', '')
-  playTop.append(timerEl, progressEl)
+  playTop.append(timerEl)
 
-  const cluePanel = el('div', 'clue-panel')
-  const clueLabel = el('div', 'clue-label', 'Clue')
+  const hintsHeader = el('div', 'hints-header')
+  const hintsImg = document.createElement('img')
+  hintsImg.className = 'hints-header-img'
+  hintsImg.src = `${import.meta.env.BASE_URL}brand/hints-header.png`
+  hintsImg.alt = 'Hints'
+  hintsHeader.append(hintsImg)
+
+  const clueBand = el('div', 'clue-band')
+  const clueBandInner = el('div', 'clue-band-inner')
+  const ribbonImg = document.createElement('img')
+  ribbonImg.className = 'clue-ribbon-img'
+  ribbonImg.src = `${import.meta.env.BASE_URL}brand/ribbon.png`
+  ribbonImg.alt = ''
   const clueText = el('p', 'clue-text', '')
-  cluePanel.append(clueLabel, clueText)
+  clueBandInner.append(ribbonImg, clueText)
+  clueBand.append(clueBandInner)
 
+  const scanFrame = el('div', 'scan-frame')
   const scanWrap = el('div', 'scan-wrap')
   const video = document.createElement('video')
   video.className = 'scan-video'
@@ -82,14 +97,16 @@ async function main(): Promise<void> {
   scanCanvas.className = 'scan-canvas'
   scanCanvas.hidden = true
   scanWrap.append(video, scanCanvas)
+  scanFrame.append(scanWrap)
 
-  const hintScan = el('p', 'scan-hint', 'Point the camera at the booth QR code.')
+  const playFooter = el('div', 'play-footer')
+  const talabatLogo = document.createElement('img')
+  talabatLogo.className = 'talabat-logo-img'
+  talabatLogo.src = `${import.meta.env.BASE_URL}brand/logo.png`
+  talabatLogo.alt = 'talabat'
+  playFooter.append(talabatLogo)
 
-  const scanFeedback = el('div', 'scan-feedback')
-  const scanStatusEl = el('p', 'scan-status', 'Waiting for QR…')
-  const scanLastEl = el('p', 'scan-last', '')
-  scanFeedback.append(scanStatusEl, scanLastEl)
-  play.append(playTop, cluePanel, scanWrap, scanFeedback, hintScan)
+  play.append(playTop, hintsHeader, clueBand, scanFrame, playFooter)
 
   const modal = el('div', 'modal')
   modal.hidden = true
@@ -99,7 +116,7 @@ async function main(): Promise<void> {
   const modalHint = el(
     'p',
     'modal-hint',
-    '3D appears on the camera preview (centered first, then on the QR). Use good light and hold steady.',
+    'Keep the QR in frame — the reward sits on the code. Tap Continue when ready.',
   )
   const modalBtn = el('button', 'btn primary block', 'Continue')
   modalCard.append(modalTitle, modalHint, modalBtn)
@@ -138,7 +155,7 @@ async function main(): Promise<void> {
   let rafTimer = 0
   let qrHandle: QrScanHandle | null = null
   let rewardModalOpen = false
-  const qrAr = new QrArOverlay(scanWrap, video)
+  const rewardFx = new RewardChestReveal(scanWrap, video)
 
   const updateTimerDisplay = (): void => {
     if (timerStart === null) {
@@ -161,30 +178,12 @@ async function main(): Promise<void> {
     cancelAnimationFrame(rafTimer)
   }
 
-  function updateProgress(): void {
-    if (!round) return
-    progressEl.textContent = `Booth ${step + 1} of ${round.items.length}`
-  }
-
   function showCurrentClue(): void {
     if (!round || step >= round.items.length) return
     clueText.textContent = round.items[step].hint
-    updateProgress()
-    scanStatusEl.textContent = 'Waiting for QR…'
-    scanStatusEl.className = 'scan-status'
-    scanLastEl.textContent = ''
-  }
-
-  function truncatePayload(text: string, max: number): string {
-    const t = text.trim()
-    if (t.length <= max) return t
-    return `${t.slice(0, max)}…`
   }
 
   async function onQrPayload(text: string): Promise<void> {
-    const preview = truncatePayload(text, 96)
-    scanLastEl.textContent = preview ? `Read: “${preview}”` : ''
-
     if (rewardModalOpen) return
 
     if (!round || timerStart === null) return
@@ -193,29 +192,24 @@ async function main(): Promise<void> {
     if (!row) return
 
     if (!payloadMatchesItem(text, row.item)) {
-      scanStatusEl.className = 'scan-status scan-status--warn'
-      scanStatusEl.textContent = `Not this booth — QR must match “${row.item.name}” (customId: ${row.item.customId})`
       if (navigator.vibrate) navigator.vibrate(25)
       window.setTimeout(() => qrHandle?.clearLast(), 400)
       return
     }
 
-    scanStatusEl.className = 'scan-status scan-status--ok'
-    scanStatusEl.textContent = 'Match — 3D on QR'
     if (navigator.vibrate) navigator.vibrate([35, 50, 35])
 
     rewardModalOpen = true
     modal.hidden = false
     modalTitle.textContent = row.item.name
-    await qrAr.loadModel(modelUrlForCustomId(row.item.customId))
-    qrAr.showModel()
-    requestAnimationFrame(() => qrAr.resize())
+    await rewardFx.loadModel(modelUrlForCustomId(row.item.customId))
+    rewardFx.showModel()
+    requestAnimationFrame(() => rewardFx.resize())
 
     const onContinue = async () => {
       modalBtn.removeEventListener('click', onContinue)
       rewardModalOpen = false
-      qrAr.setTracking(null)
-      qrAr.dispose()
+      rewardFx.dispose()
       modal.hidden = true
       step += 1
 
@@ -236,7 +230,7 @@ async function main(): Promise<void> {
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Could not submit score'
           modal.hidden = true
-          qrAr.dispose()
+          rewardFx.dispose()
           error.querySelector('.msg')!.textContent = msg
           showScreen(app, 'error')
         }
@@ -261,12 +255,7 @@ async function main(): Promise<void> {
       {
         initialLast,
         onTrackFrame: (info) => {
-          if (!rewardModalOpen || !round) return
-          const row = round.items[step]
-          if (!info || !row) return
-          if (payloadMatchesItem(info.data, row.item)) {
-            qrAr.setTracking(info.location)
-          }
+          if (rewardModalOpen) rewardFx.setTracking(info)
         },
       },
     )
@@ -315,7 +304,6 @@ async function main(): Promise<void> {
       await startCamera(video)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Camera blocked or unavailable'
-      hintScan.textContent = msg
       stopLoopTimer()
       timerStart = null
       error.querySelector('.msg')!.textContent = msg
@@ -326,7 +314,7 @@ async function main(): Promise<void> {
     startPlayScan()
   })
 
-  window.addEventListener('resize', () => qrAr.resize())
+  window.addEventListener('resize', () => rewardFx.resize())
 
   await loadRound()
 }

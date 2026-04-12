@@ -19,7 +19,8 @@ export type QrScanOptions = {
 
 const LOST_STREAK_THRESHOLD = 8
 
-const MAX_JSQR_WIDTH = 720
+/** Downscale cap for jsQR fallback; higher = sharper decode at cost of CPU. */
+const MAX_JSQR_WIDTH = 1280
 
 function createNativeDetector(): BarcodeDetector | null {
   try {
@@ -203,16 +204,44 @@ export function startQrScan(
 }
 
 export async function startCamera(video: HTMLVideoElement): Promise<void> {
-  const stream = await navigator.mediaDevices.getUserMedia({
+  const high = {
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 3840, min: 1920 },
+      height: { ideal: 2160, min: 1080 },
+      aspectRatio: { ideal: 16 / 9 },
+      frameRate: { ideal: 30, min: 24 },
+    },
+    audio: false,
+  } as const
+
+  const mid = {
     video: {
       facingMode: { ideal: 'environment' },
       width: { ideal: 1920 },
       height: { ideal: 1080 },
+      frameRate: { ideal: 30 },
     },
     audio: false,
-  })
+  } as const
+
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(high as MediaStreamConstraints)
+  } catch {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(mid as MediaStreamConstraints)
+    } catch {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      })
+    }
+  }
+
   video.srcObject = stream
   video.playsInline = true
+  video.setAttribute('playsinline', '')
   await video.play()
 }
 

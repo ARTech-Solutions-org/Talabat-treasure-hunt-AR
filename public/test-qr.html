@@ -11,9 +11,12 @@
         color: #e6edf3;
       }
       body {
-        max-width: 28rem;
+        max-width: 26rem;
         margin: 2rem auto;
-        padding: 0 1rem;
+        padding: 0 1rem 3rem;
+      }
+      h1 {
+        font-size: 1.35rem;
       }
       label {
         display: block;
@@ -21,7 +24,7 @@
         font-size: 0.85rem;
         color: #8b949e;
       }
-      input {
+      input[type='text'] {
         width: 100%;
         margin-top: 0.35rem;
         padding: 0.6rem 0.75rem;
@@ -32,8 +35,35 @@
         font-size: 1rem;
         box-sizing: border-box;
       }
+      input[type='file'] {
+        margin-top: 0.35rem;
+        font-size: 0.8rem;
+        max-width: 100%;
+      }
+      .row {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+      .row input[type='checkbox'] {
+        margin-top: 0.2rem;
+      }
+      .row label {
+        margin-top: 0;
+        font-size: 0.88rem;
+        color: #c9d1d9;
+        font-weight: 500;
+      }
+      .sub {
+        font-size: 0.78rem;
+        color: #8b949e;
+        margin: 0.25rem 0 0 1.6rem;
+        line-height: 1.4;
+      }
       button {
         margin-top: 1rem;
+        margin-right: 0.5rem;
         padding: 0.65rem 1rem;
         border: none;
         border-radius: 8px;
@@ -43,18 +73,32 @@
         cursor: pointer;
         font-size: 1rem;
       }
-      button:hover {
+      button:hover:not(:disabled) {
         filter: brightness(1.05);
       }
-      #qrcode {
-        margin: 1.5rem auto;
+      button.secondary {
+        background: #21262d;
+        border: 1px solid #30363d;
+        color: #e6edf3;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      #preview-wrap {
+        margin: 1.5rem auto 0;
         padding: 1rem;
-        background: #fff;
+        background: #21262d;
         border-radius: 12px;
         width: fit-content;
+        max-width: 100%;
       }
-      #qrcode img {
+      #preview {
         display: block;
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+        background: #fff;
       }
       .hint {
         font-size: 0.9rem;
@@ -67,6 +111,13 @@
         padding: 0.1rem 0.35rem;
         border-radius: 4px;
         font-size: 0.9em;
+      }
+      .actions {
+        margin-top: 1rem;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
       }
     </style>
   </head>
@@ -81,9 +132,32 @@
     <label for="payload">QR payload (plain text)</label>
     <input id="payload" type="text" value="2" autocomplete="off" spellcheck="false" />
 
-    <button type="button" id="gen">Generate QR</button>
+    <div class="row">
+      <input type="checkbox" id="optCaption" checked />
+      <label for="optCaption">Include payload text below the QR in the image</label>
+    </div>
+    <p class="sub">The same PNG can show the scannable code plus a readable label (useful for printing booth signs).</p>
 
-    <div id="qrcode" aria-live="polite"></div>
+    <div class="row">
+      <input type="checkbox" id="optIcon" />
+      <label for="optIcon">Add center image (logo) on top of the QR</label>
+    </div>
+    <p class="sub">
+      Uses <strong>high error correction</strong> so scanners still read the code. Keep the logo small
+      (about 20–25% of the code width).
+    </p>
+
+    <label for="iconFile" style="margin-top: 0.75rem">Center image file (PNG or JPG)</label>
+    <input id="iconFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled />
+
+    <div class="actions">
+      <button type="button" id="gen">Generate preview</button>
+      <button type="button" id="download" class="secondary" disabled>Download PNG</button>
+    </div>
+
+    <div id="preview-wrap" hidden>
+      <canvas id="preview" width="320" height="320" aria-label="QR preview"></canvas>
+    </div>
 
     <p class="hint">
       Example from API: <code>customId: "2"</code> → payload <code>2</code>. For <code>name:
@@ -92,23 +166,246 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script>
-      const el = document.getElementById('qrcode')
-      const input = document.getElementById('payload')
-      function render() {
-        el.innerHTML = ''
-        const text = input.value.trim()
-        if (!text) {
-          el.textContent = 'Enter a non-empty payload.'
+      ;(function () {
+        const QR = window.QRCode
+        if (!QR) {
+          document.body.innerHTML = '<p>Failed to load QR library.</p>'
           return
         }
-        new QRCode(el, {
-          text,
-          width: 280,
-          height: 280,
+
+        const payloadInput = document.getElementById('payload')
+        const optCaption = document.getElementById('optCaption')
+        const optIcon = document.getElementById('optIcon')
+        const iconFile = document.getElementById('iconFile')
+        const genBtn = document.getElementById('gen')
+        const downloadBtn = document.getElementById('download')
+        const preview = document.getElementById('preview')
+        const previewWrap = document.getElementById('preview-wrap')
+
+        let lastDataUrl = null
+
+        const hiddenHost = document.createElement('div')
+        hiddenHost.setAttribute('aria-hidden', 'true')
+        hiddenHost.style.cssText = 'position:absolute;left:-9999px;top:0;width:512px;height:512px;overflow:hidden'
+        document.body.appendChild(hiddenHost)
+
+        optIcon.addEventListener('change', () => {
+          iconFile.disabled = !optIcon.checked
+          if (!optIcon.checked) iconFile.value = ''
         })
-      }
-      document.getElementById('gen').addEventListener('click', render)
-      render()
+
+        function loadImage(src) {
+          return new Promise((resolve, reject) => {
+            const im = new Image()
+            im.crossOrigin = 'anonymous'
+            im.onload = () => resolve(im)
+            im.onerror = () => reject(new Error('Image load failed'))
+            im.src = src
+          })
+        }
+
+        function getIconBitmap() {
+          const f = iconFile.files && iconFile.files[0]
+          if (!f || !optIcon.checked) return Promise.resolve(null)
+          return new Promise((resolve, reject) => {
+            const r = new FileReader()
+            r.onload = () => {
+              loadImage(r.result)
+                .then(resolve)
+                .catch(reject)
+            }
+            r.onerror = () => reject(new Error('Could not read file'))
+            r.readAsDataURL(f)
+          })
+        }
+
+        function wrapCaptionLines(ctx, caption, maxW, fontSize) {
+          ctx.font = `600 ${fontSize}px system-ui, Segoe UI, sans-serif`
+          const words = String(caption).split(/\s+/)
+          const lines = []
+          let line = ''
+          for (const w of words) {
+            const test = line ? `${line} ${w}` : w
+            if (ctx.measureText(test).width <= maxW) line = test
+            else {
+              if (line) lines.push(line)
+              line = w
+            }
+          }
+          if (line) lines.push(line)
+          return lines.slice(0, 6)
+        }
+
+        /**
+         * Draw QR + optional center icon + optional caption into one canvas.
+         */
+        function buildCompositeCanvas(qrImg, text, options) {
+          const qrSize = 320
+          const pad = 16
+          const caption = options.caption ? String(text) : ''
+          const icon = options.iconImg
+
+          const captionPad = 10
+          const fontSize = 14
+          const lineHeight = Math.round(fontSize * 1.35)
+          const measure = document.createElement('canvas').getContext('2d')
+          let captionHeight = 0
+          if (caption && measure) {
+            const lines = wrapCaptionLines(measure, caption, qrSize, fontSize)
+            captionHeight = lines.length * lineHeight + captionPad
+          }
+
+          const cw = pad * 2 + qrSize
+          const ch = pad * 2 + qrSize + captionHeight
+
+          const canvas = document.createElement('canvas')
+          canvas.width = cw
+          canvas.height = ch
+          const ctx = canvas.getContext('2d')
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(0, 0, cw, ch)
+
+          ctx.drawImage(qrImg, pad, pad, qrSize, qrSize)
+
+          if (icon && icon.complete && (icon.naturalWidth || icon.width)) {
+            const iw = icon.naturalWidth || icon.width
+            const ih = icon.naturalHeight || icon.height
+            const hole = Math.round(qrSize * 0.24)
+            const cx = pad + qrSize / 2
+            const cy = pad + qrSize / 2
+            const scale = hole / Math.max(iw, ih)
+            const dw = iw * scale
+            const dh = ih * scale
+            const margin = 4
+            ctx.fillStyle = '#ffffff'
+            ctx.beginPath()
+            const rw = dw + margin * 2
+            const rh = dh + margin * 2
+            const rx = cx - rw / 2
+            const ry = cy - rh / 2
+            const r = 6
+            ctx.moveTo(rx + r, ry)
+            ctx.arcTo(rx + rw, ry, rx + rw, ry + rh, r)
+            ctx.arcTo(rx + rw, ry + rh, rx, ry + rh, r)
+            ctx.arcTo(rx, ry + rh, rx, ry, r)
+            ctx.arcTo(rx, ry, rx + rw, ry, r)
+            ctx.closePath()
+            ctx.fill()
+            ctx.drawImage(icon, cx - dw / 2, cy - dh / 2, dw, dh)
+          }
+
+          if (caption) {
+            ctx.font = `600 ${fontSize}px system-ui, Segoe UI, sans-serif`
+            ctx.fillStyle = '#1a1a1a'
+            ctx.textAlign = 'center'
+            const lines = wrapCaptionLines(ctx, caption, qrSize, fontSize)
+            let y = pad + qrSize + captionPad + fontSize
+            for (const ln of lines) {
+              ctx.fillText(ln, cw / 2, y)
+              y += lineHeight
+            }
+          }
+
+          return canvas
+        }
+
+        function renderQrDom(text, useHighCorrection) {
+          hiddenHost.innerHTML = ''
+          const level = useHighCorrection ? QR.CorrectLevel.H : QR.CorrectLevel.M
+          new QR(hiddenHost, {
+            text,
+            width: 320,
+            height: 320,
+            correctLevel: level,
+            colorDark: '#000000',
+            colorLight: '#ffffff',
+          })
+        }
+
+        function getQrImageFromDom() {
+          const c = hiddenHost.querySelector('canvas')
+          if (c) return c
+          const img = hiddenHost.querySelector('img')
+          return img || null
+        }
+
+        async function waitForQrImage(maxMs = 2000) {
+          const step = 40
+          let t = 0
+          while (t < maxMs) {
+            const n = getQrImageFromDom()
+            if (n) {
+              if (n instanceof HTMLImageElement && !n.complete) {
+                await new Promise((res, rej) => {
+                  n.onload = () => res()
+                  n.onerror = () => rej(new Error('QR image failed'))
+                })
+              }
+              return n
+            }
+            await new Promise((r) => setTimeout(r, step))
+            t += step
+          }
+          return null
+        }
+
+        async function generate() {
+          const text = payloadInput.value.trim()
+          if (!text) {
+            alert('Enter a non-empty payload.')
+            return
+          }
+
+          const wantIcon = optIcon.checked && iconFile.files && iconFile.files[0]
+          renderQrDom(text, !!wantIcon)
+
+          const qrSource = await waitForQrImage()
+          if (!qrSource) {
+            alert('Could not create QR image in this browser.')
+            return
+          }
+
+          let iconImg = null
+          try {
+            iconImg = await getIconBitmap()
+          } catch {
+            alert('Could not load the center image.')
+            return
+          }
+
+          const composite = buildCompositeCanvas(qrSource, text, {
+            caption: optCaption.checked,
+            iconImg: iconImg || undefined,
+          })
+
+          preview.width = composite.width
+          preview.height = composite.height
+          const pctx = preview.getContext('2d')
+          pctx.clearRect(0, 0, preview.width, preview.height)
+          pctx.drawImage(composite, 0, 0)
+
+          lastDataUrl = composite.toDataURL('image/png')
+
+          previewWrap.hidden = false
+          downloadBtn.disabled = false
+        }
+
+        function download() {
+          if (!lastDataUrl) return
+          const a = document.createElement('a')
+          const safe = payloadInput.value.trim().replace(/[^\w\-]+/g, '_').slice(0, 48) || 'qr'
+          a.href = lastDataUrl
+          a.download = `treasure-hunt-qr-${safe}.png`
+          a.click()
+        }
+
+        genBtn.addEventListener('click', () => {
+          void generate()
+        })
+        downloadBtn.addEventListener('click', download)
+
+        void generate()
+      })()
     </script>
   </body>
 </html>
