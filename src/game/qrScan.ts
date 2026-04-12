@@ -19,8 +19,14 @@ export type QrScanOptions = {
 
 const LOST_STREAK_THRESHOLD = 8
 
-/** Downscale cap for jsQR fallback; higher = sharper decode at cost of CPU. */
-const MAX_JSQR_WIDTH = 1280
+/** Run QR detection at most this often (~30/s) to reduce CPU vs display refresh. */
+const SCAN_INTERVAL_MS = 33
+
+/** Emit tracking frames to AR overlay at most this often (matches scan rate cap). */
+const TRACK_FRAME_EMIT_MS = 33
+
+/** Downscale cap for jsQR fallback (CPU ∝ pixels). */
+const MAX_JSQR_WIDTH = 720
 
 function createNativeDetector(): BarcodeDetector | null {
   try {
@@ -110,6 +116,8 @@ export function startQrScan(
   let raf = 0
   let stopped = false
   let inFlight = false
+  let lastScanAt = 0
+  let lastTrackEmit = 0
 
   const emitLost = () => {
     lostStreak += 1
@@ -122,7 +130,11 @@ export function startQrScan(
 
   const handleDecode = (data: string, location: QrTrackInfo['location']) => {
     lostStreak = 0
-    options?.onTrackFrame?.({ data, location })
+    const now = performance.now()
+    if (now - lastTrackEmit >= TRACK_FRAME_EMIT_MS) {
+      lastTrackEmit = now
+      options?.onTrackFrame?.({ data, location })
+    }
     if (data !== last) {
       last = data
       onPayload(data)
@@ -164,6 +176,10 @@ export function startQrScan(
     const vh = video.videoHeight
     if (!vw || !vh) return
 
+    const now = performance.now()
+    if (now - lastScanAt < SCAN_INTERVAL_MS) return
+    lastScanAt = now
+
     if (detector) {
       if (inFlight) return
       inFlight = true
@@ -204,38 +220,40 @@ export function startQrScan(
 }
 
 export async function startCamera(video: HTMLVideoElement): Promise<void> {
-  const high = {
+  /** Prefer 720p-class streams — enough for QR + lighter on CPU than 4K/1080. */
+  const preferred: MediaStreamConstraints = {
     video: {
       facingMode: { ideal: 'environment' },
-      width: { ideal: 3840, min: 1920 },
-      height: { ideal: 2160, min: 1080 },
-      aspectRatio: { ideal: 16 / 9 },
-      frameRate: { ideal: 30, min: 24 },
+      width: { ideal: 1280, max: 1920 },
+      height: { ideal: 720, max: 1080 },
+      frameRate: { ideal: 30, max: 30 },
     },
     audio: false,
-  } as const
+  }
 
-  const mid = {
+  const fallback: MediaStreamConstraints = {
     video: {
       facingMode: { ideal: 'environment' },
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
+      width: { ideal: 854 },
+      height: { ideal: 480 },
       frameRate: { ideal: 30 },
     },
     audio: false,
-  } as const
+  }
+
+  const minimal: MediaStreamConstraints = {
+    video: { facingMode: { ideal: 'environment' } },
+    audio: false,
+  }
 
   let stream: MediaStream
   try {
-    stream = await navigator.mediaDevices.getUserMedia(high as MediaStreamConstraints)
+    stream = await navigator.mediaDevices.getUserMedia(preferred)
   } catch {
     try {
-      stream = await navigator.mediaDevices.getUserMedia(mid as MediaStreamConstraints)
+      stream = await navigator.mediaDevices.getUserMedia(fallback)
     } catch {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      })
+      stream = await navigator.mediaDevices.getUserMedia(minimal)
     }
   }
 

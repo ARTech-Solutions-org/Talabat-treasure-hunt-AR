@@ -4,7 +4,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 
 import { FALLBACK_MODEL_URL } from './config'
 import type { QrTrackInfo } from './qrScan'
-import { dist2D, videoPointToContainerLocal } from './videoProjection'
+import { dist2D, mapQrCornersToContainer } from './videoProjection'
 
 function easeOutBack(t: number): number {
   const c1 = 1.70158
@@ -41,15 +41,7 @@ export class RewardChestReveal {
 
   setTracking(info: QrTrackInfo | null): void {
     if (!info) return
-    const { location } = info
-    const map = (p: { x: number; y: number }) =>
-      videoPointToContainerLocal(this.videoEl, this.wrap, p.x, p.y)
-    this.trackingCorners = [
-      map(location.topLeftCorner),
-      map(location.topRightCorner),
-      map(location.bottomRightCorner),
-      map(location.bottomLeftCorner),
-    ]
+    this.trackingCorners = mapQrCornersToContainer(this.videoEl, this.wrap, info.location)
   }
 
   private async loadMeshFromUrl(primaryUrl: string): Promise<{
@@ -159,7 +151,7 @@ export class RewardChestReveal {
       powerPreference: 'high-performance',
     })
     renderer.setClearColor(0x000000, 0)
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.5))
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.setSize(cw, ch)
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -251,6 +243,7 @@ export class RewardChestReveal {
     const ch = this.wrap.clientHeight || 240
     this.camera.aspect = cw / ch
     this.camera.updateProjectionMatrix()
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.setSize(cw, ch)
   }
 
