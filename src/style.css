@@ -357,7 +357,8 @@ body {
 .modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(61, 24, 24, 0.72);
+  /* No dimming — keep full-screen layer so taps don’t pass through to the game. */
+  background: transparent;
 }
 
 .modal-card {
