@@ -132,17 +132,15 @@ body {
   top: 50%;
   transform: translateY(-50%);
   margin: 0;
+  padding: 0.15em 0.25em;
   font-size: clamp(1.05rem, 4.2vw, 1.35rem);
   font-weight: 800;
-  line-height: 1.2;
+  line-height: 1.25;
   text-align: center;
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
   overflow: hidden;
 }
 

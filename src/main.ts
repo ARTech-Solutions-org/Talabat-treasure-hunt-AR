@@ -11,7 +11,7 @@ function getPlayToken(): string | null {
   return new URLSearchParams(window.location.search).get('t')
 }
 
-/** Prefer `public/models/<customId>.glb`; if missing, the loader tries `<customId>.stl`. */
+/** Prefer `public/models/<customId>.glb`. */
 function modelUrlForCustomId(customId: string): string {
   const base = import.meta.env.BASE_URL
   return `${base}models/${encodeURIComponent(customId)}.glb`
@@ -29,6 +29,7 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 function showScreen(root: HTMLElement, id: string): void {
+  root.setAttribute('data-current-screen', id)
   root.querySelectorAll('[data-screen]').forEach((s) => {
     ;(s as HTMLElement).hidden = (s as HTMLElement).dataset.screen !== id
   })
@@ -155,7 +156,50 @@ async function main(): Promise<void> {
   let rafTimer = 0
   let qrHandle: QrScanHandle | null = null
   let rewardModalOpen = false
+  let lastQrPayload = ''
   const rewardFx = new RewardChestReveal(scanWrap, video)
+
+  const playedKeyFor = (roundId: string): string => `tth:played:${roundId}:${token}`
+
+  const hasPlayedRound = (roundId: string): boolean => {
+    try {
+      return localStorage.getItem(playedKeyFor(roundId)) === '1'
+    } catch {
+      return false
+    }
+  }
+
+  const markPlayedRound = (roundId: string): void => {
+    try {
+      localStorage.setItem(playedKeyFor(roundId), '1')
+    } catch {
+      /* ignore storage failures (private mode / quota) */
+    }
+  }
+
+  const fitClueText = (): void => {
+    // Auto-shrink hint text to fit the ribbon area.
+    requestAnimationFrame(() => {
+      const bandH = clueBandInner.getBoundingClientRect().height
+      if (!bandH) return
+      // Slightly generous height + padding prevents glyph descenders from being clipped.
+      const maxH = Math.max(28, bandH * 0.7)
+      clueText.style.maxHeight = `${Math.floor(maxH + 2)}px`
+      clueText.style.overflow = 'hidden'
+
+      const maxPx = Math.round(Math.min(22, bandH * 0.18))
+      const minPx = 12
+      let px = Math.max(minPx, maxPx)
+      clueText.style.fontSize = `${px}px`
+
+      for (let i = 0; i < 18; i += 1) {
+        if (clueText.scrollHeight <= clueText.clientHeight + 1) break
+        px -= 1
+        if (px <= minPx) break
+        clueText.style.fontSize = `${px}px`
+      }
+    })
+  }
 
   const updateTimerDisplay = (): void => {
     if (timerStart === null) {
@@ -181,12 +225,16 @@ async function main(): Promise<void> {
   function showCurrentClue(): void {
     if (!round || step >= round.items.length) return
     clueText.textContent = round.items[step].hint
+    // Preload the next model early so the "Found!" reveal is instant on scan.
+    void rewardFx.preloadModel(modelUrlForCustomId(round.items[step].item.customId))
+    fitClueText()
   }
 
   async function onQrPayload(text: string): Promise<void> {
     if (rewardModalOpen) return
 
     if (!round || timerStart === null) return
+    lastQrPayload = text
 
     const row = round.items[step]
     if (!row) return
@@ -224,11 +272,13 @@ async function main(): Promise<void> {
         const durationMs = timerStart !== null ? performance.now() - timerStart : 0
         try {
           const data = await postComplete(token, durationMs)
+          if (round?._id) markPlayedRound(round._id)
           done.querySelector('.done-summary')!.textContent = `Great run, ${data.username}!`
           done.querySelector('.done-time')!.textContent = `Time: ${formatMs(data.completionDuration)}`
           showScreen(app, 'done')
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Could not submit score'
+          if (msg.toLowerCase().includes('already played') && round?._id) markPlayedRound(round._id)
           modal.hidden = true
           rewardFx.dispose()
           error.querySelector('.msg')!.textContent = msg
@@ -259,6 +309,23 @@ async function main(): Promise<void> {
         },
       },
     )
+  }
+
+  const stopPlayCapture = (): void => {
+    qrHandle?.stop()
+    qrHandle = null
+    stopCamera(video)
+  }
+
+  const resumePlayCapture = async (): Promise<void> => {
+    if (app.getAttribute('data-current-screen') !== 'play') return
+    if (!round || timerStart === null) return
+    try {
+      await startCamera(video)
+    } catch {
+      return
+    }
+    startPlayScan(lastQrPayload)
   }
 
   function formatMs(ms: number): string {
@@ -293,6 +360,12 @@ async function main(): Promise<void> {
 
   lobby.querySelector('button')!.addEventListener('click', async () => {
     if (!round) return
+    if (hasPlayedRound(round._id)) {
+      error.querySelector('.msg')!.textContent =
+        'You already played this round. Please wait for the next round.'
+      showScreen(app, 'error')
+      return
+    }
     step = 0
     timerStart = performance.now()
     showScreen(app, 'play')
@@ -314,7 +387,22 @@ async function main(): Promise<void> {
     startPlayScan()
   })
 
-  window.addEventListener('resize', () => rewardFx.resize())
+  window.addEventListener('resize', () => {
+    rewardFx.resize()
+    fitClueText()
+  })
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (app.getAttribute('data-current-screen') === 'play') stopPlayCapture()
+      return
+    }
+    void resumePlayCapture()
+  })
+
+  window.addEventListener('pageshow', () => {
+    void resumePlayCapture()
+  })
 
   await loadRound()
 }

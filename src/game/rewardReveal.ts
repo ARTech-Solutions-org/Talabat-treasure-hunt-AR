@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
+import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 
 import { FALLBACK_MODEL_URL } from './config'
 import type { QrTrackInfo } from './qrScan'
@@ -19,6 +19,13 @@ const MODEL_SCALE_BOOST = 1.28
  * Reward GLB / GLTF / STL anchored to the booth QR; natural materials and idle rotation only.
  */
 export class RewardChestReveal {
+  private static readonly assetCache = new Map<
+    string,
+    Promise<{
+      makeInstance: () => { object: THREE.Object3D; clips: THREE.AnimationClip[] }
+    }>
+  >()
+
   private readonly wrap: HTMLElement
   private readonly videoEl: HTMLVideoElement
   private renderer: THREE.WebGLRenderer | null = null
@@ -39,59 +46,57 @@ export class RewardChestReveal {
     this.videoEl = video
   }
 
+  /**
+   * Preloads (downloads + parses) the model and caches it so `loadModel()` can be instant.
+   * Safe to call multiple times; concurrent calls dedupe.
+   */
+  preloadModel(modelUrl: string): Promise<void> {
+    return RewardChestReveal.getAsset(modelUrl).then(() => {})
+  }
+
   setTracking(info: QrTrackInfo | null): void {
     if (!info) return
     this.trackingCorners = mapQrCornersToContainer(this.videoEl, this.wrap, info.location)
+  }
+
+  private static getAsset(
+    primaryUrl: string,
+  ): Promise<{ makeInstance: () => { object: THREE.Object3D; clips: THREE.AnimationClip[] } }> {
+    const hit = RewardChestReveal.assetCache.get(primaryUrl)
+    if (hit) return hit
+
+    const p = (async () => {
+      const gltfLoader = new GLTFLoader()
+
+      const gltfInstanceFactory = async (
+        url: string,
+      ): Promise<{ makeInstance: () => { object: THREE.Object3D; clips: THREE.AnimationClip[] } }> => {
+        const gltf = await gltfLoader.loadAsync(url)
+        return {
+          makeInstance: () => ({
+            object: skeletonClone(gltf.scene),
+            clips: gltf.animations,
+          }),
+        }
+      }
+
+      try {
+        return await gltfInstanceFactory(primaryUrl)
+      } catch {
+        return await gltfInstanceFactory(FALLBACK_MODEL_URL)
+      }
+    })()
+
+    RewardChestReveal.assetCache.set(primaryUrl, p)
+    return p
   }
 
   private async loadMeshFromUrl(primaryUrl: string): Promise<{
     object: THREE.Object3D
     clips: THREE.AnimationClip[]
   }> {
-    const gltfLoader = new GLTFLoader()
-    const stlLoader = new STLLoader()
-
-    const loadStl = async (url: string): Promise<{ object: THREE.Object3D; clips: THREE.AnimationClip[] }> => {
-      const geometry = await stlLoader.loadAsync(url)
-      geometry.computeVertexNormals()
-      geometry.center()
-      const mesh = new THREE.Mesh(
-        geometry,
-        new THREE.MeshStandardMaterial({
-          color: 0xc8c8c8,
-          metalness: 0.35,
-          roughness: 0.45,
-        }),
-      )
-      const g = new THREE.Group()
-      g.add(mesh)
-      return { object: g, clips: [] }
-    }
-
-    if (primaryUrl.toLowerCase().endsWith('.stl')) {
-      try {
-        return await loadStl(primaryUrl)
-      } catch {
-        const gltf = await gltfLoader.loadAsync(FALLBACK_MODEL_URL)
-        return { object: gltf.scene, clips: gltf.animations }
-      }
-    }
-
-    try {
-      const gltf = await gltfLoader.loadAsync(primaryUrl)
-      return { object: gltf.scene, clips: gltf.animations }
-    } catch {
-      const stlUrl = primaryUrl.replace(/\.glb$/i, '.stl').replace(/\.gltf$/i, '.stl')
-      if (stlUrl !== primaryUrl) {
-        try {
-          return await loadStl(stlUrl)
-        } catch {
-          /* use duck */
-        }
-      }
-      const gltf = await gltfLoader.loadAsync(FALLBACK_MODEL_URL)
-      return { object: gltf.scene, clips: gltf.animations }
-    }
+    const asset = await RewardChestReveal.getAsset(primaryUrl)
+    return asset.makeInstance()
   }
 
   private updateQrAnchor(): void {

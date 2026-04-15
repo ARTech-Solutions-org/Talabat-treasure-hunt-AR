@@ -59,6 +59,9 @@ export async function postComplete(
   }
 
   if (!res.ok) {
+    if (res.status === 409) {
+      throw new Error('You already played this round.')
+    }
     const errObj = json as {
       message?: string
       error?: string
