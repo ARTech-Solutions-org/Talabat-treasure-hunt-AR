@@ -238,6 +238,44 @@ body {
   margin: 0;
 }
 
+.register-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.name-input {
+  appearance: none;
+  width: 100%;
+  padding: 0.85rem 1rem;
+  font-size: 1rem;
+  font-family: inherit;
+  color: var(--talabat-brown);
+  background: #fff;
+  border: 2px solid rgba(255, 255, 255, 0.65);
+  border-radius: 10px;
+  outline: none;
+}
+
+.name-input:focus {
+  border-color: var(--talabat-brown-mid);
+}
+
+.register-error {
+  margin: 0;
+  color: #fff;
+  font-weight: 600;
+  background: rgba(61, 24, 24, 0.35);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .btn {
   appearance: none;
   border: none;

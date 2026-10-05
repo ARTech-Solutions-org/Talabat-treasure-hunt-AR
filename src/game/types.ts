@@ -16,6 +16,11 @@ export type Round = {
   isEnabled: boolean
 }
 
+export type RegisterSuccess = {
+  username: string
+  playToken: string
+}
+
 export type CompleteSuccess = {
   username: string
   finishTime: string

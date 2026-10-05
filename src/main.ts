@@ -3,6 +3,7 @@ import './style.css'
 import type { Round } from './game/types'
 import { fetchRound } from './game/round'
 import { postComplete } from './game/complete'
+import { registerPlayer } from './game/register'
 import { payloadMatchesItem } from './game/match'
 import { startQrScan, startCamera, stopCamera, type QrScanHandle } from './game/qrScan'
 import { RewardChestReveal } from './game/rewardReveal'
@@ -130,25 +131,32 @@ async function main(): Promise<void> {
   ])
   done.hidden = true
 
-  const tokenErr = mk('token', [
-    el('h1', 'title', 'Missing play link'),
-    el(
-      'p',
-      'msg',
-      'Open the game from your registration link. It must include ?t= with your play token.',
-    ),
-  ])
-  tokenErr.hidden = true
+  const registerForm = el('form', 'register-form')
+  const nameInput = document.createElement('input')
+  nameInput.className = 'name-input'
+  nameInput.type = 'text'
+  nameInput.name = 'name'
+  nameInput.placeholder = 'Your name'
+  nameInput.autocomplete = 'name'
+  nameInput.maxLength = 40
+  nameInput.required = true
+  const registerErr = el('p', 'register-error', '')
+  registerErr.hidden = true
+  const registerBtn = el('button', 'btn primary block', 'Start')
+  registerBtn.type = 'submit'
+  registerForm.append(nameInput, registerErr, registerBtn)
 
-  screens.append(loading, error, tokenErr, lobby, play, done)
+  const register = mk('register', [
+    el('h1', 'title', 'Treasure Hunt'),
+    el('p', 'msg', 'Enter your name to start playing.'),
+    registerForm,
+  ])
+  register.hidden = true
+
+  screens.append(loading, error, register, lobby, play, done)
   app.append(screens, modal)
 
-  const tokenParam = getPlayToken()
-  if (!tokenParam) {
-    showScreen(app, 'token')
-    return
-  }
-  const token = tokenParam
+  let token = getPlayToken() ?? ''
 
   let round: Round | null = null
   let step = 0
@@ -372,7 +380,32 @@ async function main(): Promise<void> {
   }
 
   error.querySelector('button')!.addEventListener('click', () => {
-    void loadRound()
+    if (token) void loadRound()
+    else showScreen(app, 'register')
+  })
+
+  registerForm.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const name = nameInput.value.trim()
+    if (!name) {
+      registerErr.textContent = 'Please enter your name.'
+      registerErr.hidden = false
+      return
+    }
+    registerErr.hidden = true
+    registerBtn.disabled = true
+    nameInput.disabled = true
+    try {
+      const player = await registerPlayer(name)
+      token = player.playToken
+      await loadRound()
+    } catch (err) {
+      registerErr.textContent = err instanceof Error ? err.message : 'Registration failed'
+      registerErr.hidden = false
+    } finally {
+      registerBtn.disabled = false
+      nameInput.disabled = false
+    }
   })
 
   lobby.querySelector('button')!.addEventListener('click', async () => {
@@ -425,7 +458,12 @@ async function main(): Promise<void> {
     if (e.persisted) scheduleResumePlayCapture()
   })
 
-  await loadRound()
+  if (token) {
+    await loadRound()
+  } else {
+    showScreen(app, 'register')
+    nameInput.focus()
+  }
 }
 
 void main()

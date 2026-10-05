@@ -8,6 +8,7 @@ const apiRoot = API_BASE ? `${API_BASE.replace(/\/$/, '')}/api` : '/api'
 
 export const ROUND_URL = `${apiRoot}/game/round`
 export const COMPLETE_URL = `${apiRoot}/game/complete`
+export const REGISTER_URL = `${apiRoot}/auth/register`
 
 /** Public GLB used when `/models/<customId>.glb` is missing (dev / placeholder). */
 export const FALLBACK_MODEL_URL =
