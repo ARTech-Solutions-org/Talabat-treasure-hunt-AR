@@ -1,8 +1,11 @@
 import * as THREE from 'three'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 
 import { FALLBACK_MODEL_URL } from './config'
+import { isIOS } from './device'
+import { disposeObject3DDeep } from './threeDispose'
 import type { QrTrackInfo } from './qrScan'
 import { dist2D, mapQrCornersToContainer } from './videoProjection'
 
@@ -15,16 +18,36 @@ function easeOutBack(t: number): number {
 /** Extra scale on top of QR-fitted size (slightly larger on-screen model). */
 const MODEL_SCALE_BOOST = 1.28
 
+type CachedPayload = {
+  makeInstance: () => { object: THREE.Object3D; clips: THREE.AnimationClip[] }
+  disposeTemplate: () => void
+}
+
+let dracoLoaderSingleton: DRACOLoader | null = null
+
+function getDracoLoader(): DRACOLoader {
+  if (!dracoLoaderSingleton) {
+    const draco = new DRACOLoader()
+    const base = import.meta.env.BASE_URL ?? '/'
+    draco.setDecoderPath(`${base}draco/gltf/`)
+    draco.setWorkerLimit(isIOS() ? 1 : 2)
+    dracoLoaderSingleton = draco
+  }
+  return dracoLoaderSingleton
+}
+
+function createGLTFLoader(): GLTFLoader {
+  const loader = new GLTFLoader()
+  loader.setDRACOLoader(getDracoLoader())
+  return loader
+}
+
 /**
- * Reward GLB / GLTF / STL anchored to the booth QR; natural materials and idle rotation only.
+ * Reward GLB anchored to the booth QR; natural materials and idle rotation only.
+ * Draco-compressed GLBs are supported (KHR_draco_mesh_compression).
  */
 export class RewardChestReveal {
-  private static readonly assetCache = new Map<
-    string,
-    Promise<{
-      makeInstance: () => { object: THREE.Object3D; clips: THREE.AnimationClip[] }
-    }>
-  >()
+  private static readonly assetCache = new Map<string, Promise<CachedPayload>>()
 
   private readonly wrap: HTMLElement
   private readonly videoEl: HTMLVideoElement
@@ -54,36 +77,56 @@ export class RewardChestReveal {
     return RewardChestReveal.getAsset(modelUrl).then(() => {})
   }
 
+  /**
+   * Drop a booth’s cached GLB from memory after the reveal (important on iOS).
+   * Call with the same URL passed to `loadModel` / `preloadModel`.
+   */
+  static evictCachedModel(url: string): void {
+    const p = RewardChestReveal.assetCache.get(url)
+    if (!p) return
+    RewardChestReveal.assetCache.delete(url)
+    void p
+      .then((payload) => {
+        try {
+          payload.disposeTemplate()
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(() => {})
+  }
+
   setTracking(info: QrTrackInfo | null): void {
     if (!info) return
     this.trackingCorners = mapQrCornersToContainer(this.videoEl, this.wrap, info.location)
   }
 
-  private static getAsset(
-    primaryUrl: string,
-  ): Promise<{ makeInstance: () => { object: THREE.Object3D; clips: THREE.AnimationClip[] } }> {
+  private static getAsset(primaryUrl: string): Promise<CachedPayload> {
     const hit = RewardChestReveal.assetCache.get(primaryUrl)
     if (hit) return hit
 
-    const p = (async () => {
-      const gltfLoader = new GLTFLoader()
+    const p = (async (): Promise<CachedPayload> => {
+      const gltfLoader = createGLTFLoader()
 
-      const gltfInstanceFactory = async (
-        url: string,
-      ): Promise<{ makeInstance: () => { object: THREE.Object3D; clips: THREE.AnimationClip[] } }> => {
+      const loadOne = async (url: string): Promise<CachedPayload> => {
         const gltf = await gltfLoader.loadAsync(url)
+        const clips = gltf.animations.slice()
+        const templateRoot = gltf.scene
         return {
           makeInstance: () => ({
-            object: skeletonClone(gltf.scene),
-            clips: gltf.animations,
+            object: skeletonClone(templateRoot),
+            clips,
           }),
+          disposeTemplate: () => {
+            disposeObject3DDeep(templateRoot)
+          },
         }
       }
 
       try {
-        return await gltfInstanceFactory(primaryUrl)
+        return await loadOne(primaryUrl)
       } catch {
-        return await gltfInstanceFactory(FALLBACK_MODEL_URL)
+        return await loadOne(FALLBACK_MODEL_URL)
       }
     })()
 
@@ -151,17 +194,27 @@ export class RewardChestReveal {
     camera.lookAt(0, 0, 0)
 
     const renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: !isIOS(),
       alpha: true,
-      powerPreference: 'high-performance',
+      powerPreference: isIOS() ? 'default' : 'high-performance',
     })
     renderer.setClearColor(0x000000, 0)
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    const dprCap = isIOS() ? 1 : 2
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, dprCap))
     renderer.setSize(cw, ch)
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.toneMapping = THREE.ACESFilmicToneMapping
     renderer.toneMappingExposure = 1
     renderer.domElement.className = 'reward-canvas'
+    renderer.domElement.addEventListener(
+      'webglcontextlost',
+      (e) => {
+        e.preventDefault()
+        cancelAnimationFrame(this.raf)
+        this.disposeRendererOnly()
+      },
+      false,
+    )
     this.wrap.appendChild(renderer.domElement)
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.55))
@@ -248,7 +301,8 @@ export class RewardChestReveal {
     const ch = this.wrap.clientHeight || 240
     this.camera.aspect = cw / ch
     this.camera.updateProjectionMatrix()
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    const dprCap = isIOS() ? 1 : 2
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, dprCap))
     this.renderer.setSize(cw, ch)
   }
 
@@ -264,7 +318,17 @@ export class RewardChestReveal {
 
   private disposeRendererOnly(): void {
     cancelAnimationFrame(this.raf)
+    this.mixer?.stopAllAction()
     this.mixer = null
+
+    if (this.modelRoot) {
+      while (this.modelRoot.children.length) {
+        const ch = this.modelRoot.children[0]!
+        this.modelRoot.remove(ch)
+        disposeObject3DDeep(ch)
+      }
+    }
+
     if (this.renderer) {
       const el = this.renderer.domElement
       if (el.parentNode) el.parentNode.removeChild(el)

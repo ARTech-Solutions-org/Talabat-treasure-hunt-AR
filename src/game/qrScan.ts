@@ -1,5 +1,7 @@
 import jsQR from 'jsqr'
 
+import { isIOS } from './device'
+
 export type QrTrackInfo = {
   data: string
   location: {
@@ -19,14 +21,14 @@ export type QrScanOptions = {
 
 const LOST_STREAK_THRESHOLD = 8
 
-/** Run QR detection at most this often (~30/s) to reduce CPU vs display refresh. */
-const SCAN_INTERVAL_MS = 33
+/** Downscale cap for jsQR fallback (CPU ∝ pixels). iOS Safari has no BarcodeDetector — lighter decode helps. */
+const MAX_JSQR_WIDTH = isIOS() ? 480 : 720
+
+/** Run QR detection at most this often. Slightly slower on iOS to reduce watchdog / tab kills. */
+const SCAN_INTERVAL_MS = isIOS() ? 50 : 33
 
 /** Emit tracking frames to AR overlay at most this often (matches scan rate cap). */
-const TRACK_FRAME_EMIT_MS = 33
-
-/** Downscale cap for jsQR fallback (CPU ∝ pixels). */
-const MAX_JSQR_WIDTH = 720
+const TRACK_FRAME_EMIT_MS = isIOS() ? 50 : 33
 
 function createNativeDetector(): BarcodeDetector | null {
   try {
@@ -154,7 +156,8 @@ export function startQrScan(
     ctx.drawImage(video, 0, 0, sw, sh)
     const imageData = ctx.getImageData(0, 0, sw, sh)
     const code = jsQR(imageData.data, sw, sh, {
-      inversionAttempts: 'attemptBoth',
+      // iOS: avoid double inversion pass — faster decode for typical black-on-white QRs.
+      inversionAttempts: isIOS() ? 'dontInvert' : 'attemptBoth',
     })
     if (code?.data) {
       const loc =
@@ -220,16 +223,26 @@ export function startQrScan(
 }
 
 export async function startCamera(video: HTMLVideoElement): Promise<void> {
-  /** Prefer 720p-class streams — enough for QR + lighter on CPU than 4K/1080. */
-  const preferred: MediaStreamConstraints = {
-    video: {
-      facingMode: { ideal: 'environment' },
-      width: { ideal: 1280, max: 1920 },
-      height: { ideal: 720, max: 1080 },
-      frameRate: { ideal: 30, max: 30 },
-    },
-    audio: false,
-  }
+  /** Prefer 720p on Android/desktop; cap resolution on iOS to cut memory + canvas work (jsQR path). */
+  const preferred: MediaStreamConstraints = isIOS()
+    ? {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 960, max: 1280 },
+          height: { ideal: 540, max: 720 },
+          frameRate: { ideal: 24, max: 30 },
+        },
+        audio: false,
+      }
+    : {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, max: 30 },
+        },
+        audio: false,
+      }
 
   const fallback: MediaStreamConstraints = {
     video: {

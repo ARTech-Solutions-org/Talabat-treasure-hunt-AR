@@ -256,8 +256,10 @@ async function main(): Promise<void> {
 
     const onContinue = async () => {
       modalBtn.removeEventListener('click', onContinue)
+      const shownModelUrl = modelUrlForCustomId(row.item.customId)
       rewardModalOpen = false
       rewardFx.dispose()
+      RewardChestReveal.evictCachedModel(shownModelUrl)
       modal.hidden = true
       step += 1
 
@@ -317,15 +319,30 @@ async function main(): Promise<void> {
     stopCamera(video)
   }
 
+  let resumeTimerId: number | null = null
+  let resumeInFlight = false
+
   const resumePlayCapture = async (): Promise<void> => {
     if (app.getAttribute('data-current-screen') !== 'play') return
     if (!round || timerStart === null) return
+    if (resumeInFlight) return
+    resumeInFlight = true
     try {
       await startCamera(video)
+      startPlayScan(lastQrPayload)
     } catch {
-      return
+      /* camera denied or transient — avoid tight retry loops on iOS */
+    } finally {
+      resumeInFlight = false
     }
-    startPlayScan(lastQrPayload)
+  }
+
+  const scheduleResumePlayCapture = (): void => {
+    if (resumeTimerId !== null) window.clearTimeout(resumeTimerId)
+    resumeTimerId = window.setTimeout(() => {
+      resumeTimerId = null
+      void resumePlayCapture()
+    }, 350)
   }
 
   function formatMs(ms: number): string {
@@ -394,14 +411,18 @@ async function main(): Promise<void> {
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
+      if (resumeTimerId !== null) {
+        window.clearTimeout(resumeTimerId)
+        resumeTimerId = null
+      }
       if (app.getAttribute('data-current-screen') === 'play') stopPlayCapture()
       return
     }
-    void resumePlayCapture()
+    scheduleResumePlayCapture()
   })
 
-  window.addEventListener('pageshow', () => {
-    void resumePlayCapture()
+  window.addEventListener('pageshow', (e: PageTransitionEvent) => {
+    if (e.persisted) scheduleResumePlayCapture()
   })
 
   await loadRound()

@@ -5,10 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/copy-draco-decoders.mjs",
     "build": "tsc && vite build",
+    "compress-models": "node scripts/compress-glb-models.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@gltf-transform/cli": "^4.3.0",
     "@types/three": "^0.183.1",
     "typescript": "~6.0.2",
     "vite": "^8.0.4"
