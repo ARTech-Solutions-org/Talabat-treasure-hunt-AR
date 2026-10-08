@@ -182,6 +182,9 @@ export class RewardChestReveal {
   async loadModel(modelUrl: string): Promise<void> {
     this.disposeRendererOnly()
 
+    const { object: model, clips } = await this.loadMeshFromUrl(modelUrl)
+    this.disposeRendererOnly()
+
     const cw = this.wrap.clientWidth || 320
     const ch = this.wrap.clientHeight || 240
     const aspect = cw / ch
@@ -210,6 +213,7 @@ export class RewardChestReveal {
       'webglcontextlost',
       (e) => {
         e.preventDefault()
+        if (this.renderer !== renderer) return
         cancelAnimationFrame(this.raf)
         this.disposeRendererOnly()
       },
@@ -227,8 +231,6 @@ export class RewardChestReveal {
 
     const trackingGroup = new THREE.Group()
     scene.add(trackingGroup)
-
-    const { object: model, clips } = await this.loadMeshFromUrl(modelUrl)
 
     const modelRoot = new THREE.Group()
     const box = new THREE.Box3().setFromObject(model)
@@ -329,12 +331,15 @@ export class RewardChestReveal {
       }
     }
 
-    if (this.renderer) {
-      const el = this.renderer.domElement
-      if (el.parentNode) el.parentNode.removeChild(el)
-      this.renderer.dispose()
-    }
+    const renderer = this.renderer
     this.renderer = null
+    if (renderer) {
+      const el = renderer.domElement
+      if (el.parentNode) el.parentNode.removeChild(el)
+      renderer.dispose()
+      // Mobile browsers cap live WebGL contexts; release this one now instead of waiting for GC.
+      renderer.forceContextLoss()
+    }
     this.scene = null
     this.camera = null
     this.trackingGroup = null

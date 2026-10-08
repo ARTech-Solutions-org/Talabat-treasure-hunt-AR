@@ -164,6 +164,7 @@ async function main(): Promise<void> {
   let rafTimer = 0
   let qrHandle: QrScanHandle | null = null
   let rewardModalOpen = false
+  let revealSeq = 0
   let lastQrPayload = ''
   const rewardFx = new RewardChestReveal(scanWrap, video)
 
@@ -256,16 +257,15 @@ async function main(): Promise<void> {
     if (navigator.vibrate) navigator.vibrate([35, 50, 35])
 
     rewardModalOpen = true
+    const revealId = ++revealSeq
     modal.hidden = false
     modalTitle.textContent = row.item.name
-    await rewardFx.loadModel(modelUrlForCustomId(row.item.customId))
-    rewardFx.showModel()
-    requestAnimationFrame(() => rewardFx.resize())
 
     const onContinue = async () => {
       modalBtn.removeEventListener('click', onContinue)
       const shownModelUrl = modelUrlForCustomId(row.item.customId)
       rewardModalOpen = false
+      revealSeq += 1
       rewardFx.dispose()
       RewardChestReveal.evictCachedModel(shownModelUrl)
       modal.hidden = true
@@ -302,6 +302,20 @@ async function main(): Promise<void> {
     }
 
     modalBtn.addEventListener('click', onContinue, { once: true })
+
+    try {
+      await rewardFx.loadModel(modelUrlForCustomId(row.item.customId))
+    } catch (e) {
+      console.error('[reward] model failed to load', e)
+      return
+    }
+    // Continue may have been tapped while the model was still loading.
+    if (revealId !== revealSeq) {
+      rewardFx.dispose()
+      return
+    }
+    rewardFx.showModel()
+    requestAnimationFrame(() => rewardFx.resize())
   }
 
   function startPlayScan(initialLast?: string): void {
