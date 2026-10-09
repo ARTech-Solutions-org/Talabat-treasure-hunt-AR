@@ -144,6 +144,31 @@ body {
   overflow: hidden;
 }
 
+.clue-band.is-truncated {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.clue-more {
+  margin: 0.2rem 0 0;
+  text-align: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.clue-sheet-text {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--talabat-brown);
+  overflow-y: auto;
+}
+
 .scan-frame {
   flex: 1;
   min-height: 0;

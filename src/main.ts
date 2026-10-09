@@ -87,7 +87,9 @@ async function main(): Promise<void> {
   ribbonImg.alt = ''
   const clueText = el('p', 'clue-text', '')
   clueBandInner.append(ribbonImg, clueText)
-  clueBand.append(clueBandInner)
+  const clueMore = el('p', 'clue-more', 'Tap the clue to read it all')
+  clueMore.hidden = true
+  clueBand.append(clueBandInner, clueMore)
 
   const scanFrame = el('div', 'scan-frame')
   const scanWrap = el('div', 'scan-wrap')
@@ -124,6 +126,16 @@ async function main(): Promise<void> {
   modalCard.append(modalTitle, modalHint, modalBtn)
   modal.append(modalBackdrop, modalCard)
 
+  const clueSheet = el('div', 'modal clue-sheet')
+  clueSheet.hidden = true
+  const clueSheetBackdrop = el('div', 'modal-backdrop')
+  const clueSheetCard = el('div', 'modal-card')
+  const clueSheetTitle = el('h2', 'modal-title', 'Your clue')
+  const clueSheetText = el('p', 'clue-sheet-text', '')
+  const clueSheetBtn = el('button', 'btn primary block', 'Back to the hunt')
+  clueSheetCard.append(clueSheetTitle, clueSheetText, clueSheetBtn)
+  clueSheet.append(clueSheetBackdrop, clueSheetCard)
+
   const done = mk('done', [
     el('h1', 'title', 'Finished!'),
     el('p', 'done-summary', ''),
@@ -154,7 +166,7 @@ async function main(): Promise<void> {
   register.hidden = true
 
   screens.append(loading, error, register, lobby, play, done)
-  app.append(screens, modal)
+  app.append(screens, modal, clueSheet)
 
   let token = getPlayToken() ?? ''
 
@@ -186,8 +198,40 @@ async function main(): Promise<void> {
     }
   }
 
+  /** Full text of the clue currently on screen. */
+  let fullClue = ''
+
+  /** Splits "Clue text… (Item name)" so the item name can always stay visible. */
+  const splitClue = (hint: string): { body: string; tail: string } => {
+    const m = hint.match(/^([\s\S]*?)\s*(\([^()]*\))\s*$/)
+    return m ? { body: m[1], tail: m[2] } : { body: hint, tail: '' }
+  }
+
+  const closeClueSheet = (): void => {
+    clueSheet.hidden = true
+  }
+
+  const openClueSheet = (): void => {
+    if (!fullClue || rewardModalOpen) return
+    clueSheetText.textContent = fullClue
+    clueSheet.hidden = false
+  }
+
+  clueBand.addEventListener('click', () => {
+    if (clueBand.classList.contains('is-truncated')) openClueSheet()
+  })
+  clueBand.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && clueBand.classList.contains('is-truncated')) {
+      e.preventDefault()
+      openClueSheet()
+    }
+  })
+  clueSheetBtn.addEventListener('click', closeClueSheet)
+  clueSheetBackdrop.addEventListener('click', closeClueSheet)
+
   const fitClueText = (): void => {
-    // Auto-shrink hint text to fit the ribbon area.
+    // Shrink the clue to fit the ribbon; if it still doesn't fit, shorten the middle and keep
+    // the "(Item)" at the end. The full text is available by tapping the ribbon.
     requestAnimationFrame(() => {
       const bandH = clueBandInner.getBoundingClientRect().height
       if (!bandH) return
@@ -195,18 +239,41 @@ async function main(): Promise<void> {
       const maxH = Math.max(28, bandH * 0.7)
       clueText.style.maxHeight = `${Math.floor(maxH + 2)}px`
       clueText.style.overflow = 'hidden'
+      clueText.textContent = fullClue
+
+      const overflows = (): boolean => clueText.scrollHeight > clueText.clientHeight + 1
 
       const maxPx = Math.round(Math.min(22, bandH * 0.18))
-      const minPx = 12
+      const minPx = 13
       let px = Math.max(minPx, maxPx)
       clueText.style.fontSize = `${px}px`
-
-      for (let i = 0; i < 18; i += 1) {
-        if (clueText.scrollHeight <= clueText.clientHeight + 1) break
+      while (overflows() && px > minPx) {
         px -= 1
-        if (px <= minPx) break
         clueText.style.fontSize = `${px}px`
       }
+
+      let truncated = false
+      if (overflows()) {
+        const { body, tail } = splitClue(fullClue)
+        const build = (n: number): string =>
+          `${body.slice(0, n).trimEnd()}…${tail ? ` ${tail}` : ''}`
+        let lo = 0
+        let hi = body.length
+        while (lo < hi) {
+          const mid = Math.ceil((lo + hi) / 2)
+          clueText.textContent = build(mid)
+          if (overflows()) hi = mid - 1
+          else lo = mid
+        }
+        clueText.textContent = build(lo)
+        truncated = true
+      }
+
+      clueBand.classList.toggle('is-truncated', truncated)
+      clueBand.tabIndex = truncated ? 0 : -1
+      if (truncated) clueBand.setAttribute('role', 'button')
+      else clueBand.removeAttribute('role')
+      clueMore.hidden = !truncated
     })
   }
 
@@ -233,7 +300,9 @@ async function main(): Promise<void> {
 
   function showCurrentClue(): void {
     if (!round || step >= round.items.length) return
-    clueText.textContent = round.items[step].hint
+    fullClue = round.items[step].hint
+    clueText.textContent = fullClue
+    closeClueSheet()
     // Preload the next model early so the "Found!" reveal is instant on scan.
     void rewardFx.preloadModel(modelUrlForCustomId(round.items[step].item.customId))
     fitClueText()
@@ -257,6 +326,7 @@ async function main(): Promise<void> {
     if (navigator.vibrate) navigator.vibrate([35, 50, 35])
 
     rewardModalOpen = true
+    closeClueSheet()
     const revealId = ++revealSeq
     modal.hidden = false
     modalTitle.textContent = row.item.name
